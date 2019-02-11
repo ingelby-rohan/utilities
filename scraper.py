@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# encoding=utf8  
+# coding=utf-8
 import sys  
 
 reload(sys)  
@@ -26,14 +26,22 @@ class Scraper():
         self.urls = self.getFileContents(self.url_source_file)
         self.base_url = ''
 
-        self.db = 'yii2advanced_test'
-        self.db_port = 3306
-        self.db_char = 'utf8'
-        self.db_host = '127.0.0.1'
-        self.db_user = 'root'
-        self.db_pass = ''
+        # self.db = 'yii2advanced_test'
+        # self.db_port = 3306
+        # self.db_char = 'utf8'
+        # self.db_host = '127.0.0.1'
+        # self.db_user = 'root'
+        # self.db_pass = ''
 
-        self.connection = MySQLdb.connect(user=self.db_user, passwd=self.db_pass, host=self.db_host, port=self.db_port, db=self.db)
+        self.connection = MySQLdb.connect(
+            user=self.db_user, 
+            passwd=self.db_pass, 
+            host=self.db_host,
+            port=self.db_port, 
+            db=self.db,
+            charset=self.db_char, 
+            use_unicode=self.db_use_unicode
+        )
         self.cursor = self.connection.cursor()
 
         # Counter
@@ -59,10 +67,6 @@ class Scraper():
 
             except urllib.HTTPError as e:
                 if e.code == 404 or e.code == 403:
-                    self.writeUrlFile({
-                        'title': 'Page Does Not Exist',
-                        'slug' : url.split('/')[-1]
-                    })
 
                     print('PAGE DOES NOT EXIST!')
                     continue
@@ -130,15 +134,6 @@ class Scraper():
         return urls
 
 
-    def createSlug(self, str):
-        newStr = str.decode('string_escape').lower()
-
-        for filter in ["'", " ", "_", "\\", "--", ":", ","]:
-            newStr = newStr.replace(filter, "-")
-
-        return newStr
-
-
     def saveToDatabase(self, _data):
         print('SAVING ARTICLE TO DATABASE')
 
@@ -147,11 +142,11 @@ class Scraper():
         data = dict()
 
         for key, value in _data.items():
-            data.update({key : self.sanitizeString(value)})
+            data.update({key : value})
 
         try:
             # Save Article
-            sql_insert_article_query = """ 
+            sql_insert_article_query = u""" 
             INSERT INTO 
             `news_article`
             (
@@ -173,56 +168,41 @@ class Scraper():
              ) 
              VALUES 
              (
-                # `id`,
-                # `publicId`, 
-                '{slug}', 
-                '{title}', # `title`,
-                # `description`,
-                NULL, # `externalUrl`,
-                '{publish_date}', # `publicationDateTime`,
-                # `thumbnailUrl`,
-                1, # `version`,
-                1, # `statusId`,
-                # `createdAt`,
-                # `updatedAt`,
-                1, # `createdBy`,
-                1, # `updatedBy`,
-                '{author}'  # `author`
-            )""".format(**data)
+                %s, %s, %s, %s, %s, %s, %s, %s, %s   
+            )"""
 
-            result  = self.cursor.execute(sql_insert_article_query)
+            result = self.cursor.execute(sql_insert_article_query, (data['slug'], data['title'], None, data['publish_date'], 1, 1, 1, 1, data['author']))
             self.connection.commit()
 
             if not result:
                 print('SQL : There was a problem inserting the data, query:', sql_insert_article_query.replace("\n", ""))
 
-            select_article_query = """
+            select_article_query = u"""
                 SELECT 
                     id
                 FROM 
                     `news_article` 
                 WHERE 
-                    title='{title}' 
+                    title=%s
                 AND
-                    slug='{slug}'
+                    slug=%s
                 AND
-                    publicationDateTime='{publish_date}'
+                    publicationDateTime=%s
                 AND
-                    author='{author}'
+                    author=%s
                 LIMIT 1
-            """.format(**data)
+            """
 
-            self.cursor.execute(select_article_query)
+            self.cursor.execute(select_article_query, (data['title'], data['slug'], data['publish_date'], data['author']))
             results = self.cursor.fetchall()
             for row in results: 
                 data['article_id'] = row[0]
 
-            # data['content'] = self.convert_to_text(data['content'])
-
             print("MYSQL: Article inserted successfully")
 
             # Save Article
-            sql_insert_cms_content_query = """
+            # Save Article
+            sql_insert_cms_content_query = u"""
             INSERT INTO 
             `cms_content`
             (
@@ -239,18 +219,10 @@ class Scraper():
              ) 
              VALUES 
              (
-                # `id`,
-                1, 
-                {article_id}, 
-                '{content}',
-                1,
-                # `createdAt`,
-                # `updatedAt`,
-                1,
-                1
-            )""".format(**data)
+               %s, %s, %s, %s, %s, %s
+            )"""
 
-            result = self.cursor.execute(sql_insert_cms_content_query)
+            result = self.cursor.execute(sql_insert_cms_content_query, (1, data['article_id'], data['content'], 1, 1, 1))
             self.connection.commit()
             if not result:
                 print('SQL : There was a problem inserting the data, query: ' + sql_insert_cms_content_query.replace("\n", ""))
@@ -294,14 +266,12 @@ class Scraper():
 
     
     def parseHTML(self, html, element, target, html_format=False):
-        result = html.find(element, target)
+        try:
+            result = html.find(element, target).prettify().encode('utf8') if html_format else html.find(element, target).getText().encode('utf8')
+        
+            return result if result and result is not None else ''
 
-        if result and result is not None:
-            if html_format:
-                return str(self.sanitizeString(result.prettify()))
-            else:                
-                return str(self.sanitizeString(result.getText()))
-        else:
+        except:
             return ''
 
 
@@ -355,38 +325,6 @@ class Scraper():
                     article_content['youtube'] = iframe.attrs['src']
        
         return article_content
-
-
-    def convertToText(self, _string):
-        return str(_string.replace('\\xa0', ' ').replace('\n','\n\n')) if _string and _string is not None else ''
-
-
-    def sanitizeString(self, _text):
-        try:
-            if _text and type(_text) not in [bool, int, datetime]:
-                try:
-                    _text = MySQLdb.escape_string(self.encodeString(_text))
-                    return _text if (_text) or _text is not None else ''
-
-                except AttributeError:
-                    return _text if (_text) or _text is not None else ''
-            
-            else:
-                return _text if (_text) or _text is not None else ''
-
-        except UnicodeEncodeError as error:
-            print('We could not encode some content :' + str(error))
-            pass
-
-
-    def encodeString(self, text):
-        try:
-            text = str(text.encode('utf8', 'ignore')).strip() if text is not None or text != 'None' else ''
-        
-        except TypeError:
-            return text
-
-        return text
 
 
     def writeUrlFile(self, data):
