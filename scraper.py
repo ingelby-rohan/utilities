@@ -9,12 +9,13 @@ SCRAPE URLS FOR CONTENT
 """
 import urllib
 import datefinder
-import datetime
 import MySQLdb
 
-
+from datetime import datetime
 from bs4 import BeautifulSoup as soup  # HTML data structure
 from urllib import urlopen as request  # Web client
+
+now = datetime.now()
 
 class Scraper():
 
@@ -43,45 +44,54 @@ class Scraper():
         self.undoLastRun()
 
         # Truncate All Files
-        for file in [self.url_source_file, self.outputted_frontend_url, self.undo_sql]:
+        for file in [self.outputted_frontend_url, self.undo_sql]:
             self.writeFile('', file, True)
 
 
     def start(self):
-
         print('STARTING SCRIPT')
 
-        for url in self.urls:
-            
+        for url in self.urls:      
             print("(" + str(self.counter) + ")FETCHING : " + url)
             
             try:
                 client = request(url)
+
             except urllib.HTTPError as e:
                 if e.code == 404 or e.code == 403:
+                    self.writeUrlFile({
+                        'title': 'Page Does Not Exist',
+                        'slug' : url.split('/')[-1]
+                    })
+
                     print('PAGE DOES NOT EXIST!')
                     continue
             else:
                 pagecontent = client.read()
+                client.close()
 
-            client.close()
+                # Parse Data
+                article_content = self.parse(pagecontent)
 
-            # Parse Data
-            article_content = self.parse(pagecontent)
-            
-            # Save Data to Database
-            article_content = self.saveToDatabase(article_content)
+                if article_content['title']:
+                    article_content['slug'] = url.split('/')[-1]
+                
+                    # Save Data to Database
+                    article_content = self.saveToDatabase(article_content)
 
-            # Display Content Summary
-            article_content = self.displayContent(article_content)
+                    # Display Content Summary
+                    article_content = self.displayContent(article_content)
 
-            # Write Data for Frontend Access
-            self.writeUrlFile(article_content)
+                    # Write Data for Frontend Access
+                    self.writeUrlFile(article_content)
 
-            # Write Data for SQL Undo
-            self.writeUndoSQL(article_content)
+                    # Write Data for SQL Undo
+                    self.writeUndoSQL(article_content)
 
-            self.counter += 1
+                else:
+                    print('PAGE COULD NOT BE REACHED OR WAS REDIRECTED')
+
+                self.counter += 1
 
         print('ENDED SCRIPT RUN')
 
@@ -89,18 +99,13 @@ class Scraper():
 
 
     def undoLastRun(self):
-
         undoSQLRows = self.getFileContents(self.undo_sql)
 
         for row in undoSQLRows:
 
             try:
-
-                result  = self.cursor.execute(row)
+                self.cursor.execute(row)
                 self.connection.commit()
-
-                if not result:
-                    print('SQL : There was a problem inserting the data, query:', row)
 
             except MySQLdb.Error as error :
                 self.connection.rollback() #rollback if any exception occured
@@ -124,14 +129,15 @@ class Scraper():
 
         return urls
 
-    def createSlug(self, str):
 
+    def createSlug(self, str):
         newStr = str.decode('string_escape').lower()
 
-        for filter in ["'", " ", "_", "\\", "--"]:
+        for filter in ["'", " ", "_", "\\", "--", ":", ","]:
             newStr = newStr.replace(filter, "-")
 
         return newStr
+
 
     def saveToDatabase(self, _data):
         print('SAVING ARTICLE TO DATABASE')
@@ -143,10 +149,7 @@ class Scraper():
         for key, value in _data.items():
             data.update({key : self.sanitizeString(value)})
 
-        data['slug'] = self.createSlug(data['title'])
-
         try:
-            
             # Save Article
             sql_insert_article_query = """ 
             INSERT INTO 
@@ -175,7 +178,7 @@ class Scraper():
                 '{slug}', 
                 '{title}', # `title`,
                 # `description`,
-                '{iframe_src}', # `externalUrl`,
+                NULL, # `externalUrl`,
                 '{publish_date}', # `publicationDateTime`,
                 # `thumbnailUrl`,
                 1, # `version`,
@@ -269,22 +272,21 @@ class Scraper():
 
     
     def displayContent(self, article_content):
-
         if article_content['content']:
             content_display = '<Content Found>'
+
         else:
             content_display= '<Empty>'
 
         try:
-
             if article_content['is_iframe']:
                 print('IFRAME: iframe url: ' + article_content['iframe_src'] + ' title: ' + article_content['iframe_title'])
+
             else: 
                 print('ARTICLE: content: ' + content_display + ' title: ' + article_content['title'])
                 self.writeFile(article_content['content'], 'html/' + str(self.counter) + ".html", True)
 
         except UnicodeEncodeError as error:
-
             print('We could not encode some content:' + str(error))
             pass
 
@@ -292,20 +294,10 @@ class Scraper():
 
     
     def parseHTML(self, html, element, target, html_format=False):
-
         result = html.find(element, target)
 
         if result and result is not None:
             if html_format:
-                # try:
-                # Python 2.6-2.7 
-                #    from HTMLParser import HTMLParser
-                # except ImportError:
-                #    # Python 3
-                #    from html.parser import HTMLParser
-                # 
-                # html = HTMLParser()
-                # return html.unescape('&pound;682m')
                 return str(self.sanitizeString(result.prettify()))
             else:                
                 return str(self.sanitizeString(result.getText()))
@@ -314,10 +306,9 @@ class Scraper():
 
 
     def parse(self, html):
-
         article_content = {
             'title'         : '',
-            'publish_date'  : '0000-00-00',
+            'publish_date'  : '',
             'author'        : '', 
             'content'       : '',
             'youtube_link'  : '',
@@ -337,22 +328,18 @@ class Scraper():
 
         _date = html_soup.find("div", {"class": "p-article__byline__date"})
 
-        if _date and _date is not None:
-            parsed_date = datefinder.find_dates(_date.getText())
+        parsed_date = datefinder.find_dates(_date.getText()) if (_date and _date is not None) else datefinder.find_dates(now.isoformat())
 
-            for date in parsed_date:
+        for date in parsed_date:
                 article_content['publish_date'] = date
 
         if not iframes:
             print('No iframes found')
             
         else:
-
             for iframe in iframes:
-
                 # check if iframe exists
                 if iframe.attrs['src'].find("talktalk") != -1:
-
                     article_content['iframe_src'] = iframe.attrs['src']
                     article_content['is_iframe'] = True
 
@@ -362,7 +349,7 @@ class Scraper():
                     article_content['iframe_title'] = self.parseHTML(iframe_soup, 'h1', {"class": "page-title"}) if self.parseHTML(iframe_soup, 'h1', {"class": "page-title"}) else article_content['title']
                     
                     # We skip iframed content and just embed the iframe
-                    article_content['content'] = ''
+                    # article_content['content'] = ''
 
                 if iframe.attrs['src'].find("youtube") != -1:
                     article_content['youtube'] = iframe.attrs['src']
@@ -376,33 +363,41 @@ class Scraper():
 
     def sanitizeString(self, _text):
         try:
-            if _text and type(_text) not in [bool, int, datetime.datetime]:
-                _text = MySQLdb.escape_string(self.encodeString(_text))
-                return _text if (_text) or _text is not None else ''
+            if _text and type(_text) not in [bool, int, datetime]:
+                try:
+                    _text = MySQLdb.escape_string(self.encodeString(_text))
+                    return _text if (_text) or _text is not None else ''
+
+                except AttributeError:
+                    return _text if (_text) or _text is not None else ''
+            
             else:
                 return _text if (_text) or _text is not None else ''
+
         except UnicodeEncodeError as error:
             print('We could not encode some content :' + str(error))
             pass
 
+
     def encodeString(self, text):
         try:
             text = str(text.encode('utf8', 'ignore')).strip() if text is not None or text != 'None' else ''
+        
         except TypeError:
             return text
 
         return text
 
-    def writeUrlFile(self, data):
 
+    def writeUrlFile(self, data):
         frontend_url = data['title'] + "\n" + self.base_url + data['slug'] + "\n\n"
 
         self.writeFile(frontend_url, self.outputted_frontend_url)
 
         pass
 
-    def writeUndoSQL(self, data):
 
+    def writeUndoSQL(self, data):
         delete_article_sql = 'DELETE FROM news_article WHERE id = {}'.format(data['article_id']) + ";\n"
         delete_cms_sql = 'DELETE FROM cms_content WHERE newsArticleId = {}'.format(data['article_id']) + ";\n"
 
@@ -411,13 +406,15 @@ class Scraper():
 
         pass
 
+
     def writeFile(self, content, filename, truncate = False):
-        fileopen = open(filename, "a+")
-
         if truncate:
-            fileopen.truncate();
+            fileopen = open(filename, "w")
+            fileopen.write('') 
 
+        fileopen = open(filename, "a+")
         fileopen.write(content) 
+
 
 if __name__ == '__main__':
     Scraper().start()
