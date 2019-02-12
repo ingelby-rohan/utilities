@@ -26,12 +26,13 @@ class Scraper():
         self.urls = self.getFileContents(self.url_source_file)
         self.base_url = ''
 
-        # self.db = 'yii2advanced_test'
+	    # self.db = 'yii2advanced_test'
         # self.db_port = 3306
         # self.db_char = 'utf8'
         # self.db_host = '127.0.0.1'
         # self.db_user = 'root'
         # self.db_pass = ''
+        # self.db_use_unicode = True
 
         self.connection = MySQLdb.connect(
             user=self.db_user, 
@@ -76,9 +77,14 @@ class Scraper():
 
                 # Parse Data
                 article_content = self.parse(pagecontent)
+                slug = url
+
 
                 if article_content['title']:
-                    article_content['slug'] = url.split('/')[-1]
+                    for _filter in []:
+                        slug = slug.replace(_filter, '')
+
+                    article_content['slug'] = slug
                 
                     # Save Data to Database
                     article_content = self.saveToDatabase(article_content)
@@ -309,7 +315,7 @@ class Scraper():
         else:
             for iframe in iframes:
                 # check if iframe exists
-                if iframe.attrs['src'].find("talktalk") != -1:
+                if iframe.attrs['src'].find("") != -1:
                     article_content['iframe_src'] = iframe.attrs['src']
                     article_content['is_iframe'] = True
 
